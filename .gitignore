@@ -1,0 +1,9 @@
+.env
+bin/
+dist/
+tmp/
+*.log
+.mysql-data/
+.gocache/
+.mysql/
+text

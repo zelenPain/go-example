@@ -1,0 +1,85 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: training_msg_queue
+      MYSQL_USER: training
+      MYSQL_PASSWORD: training
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - "./migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql"
+      - "./migrations/002_seed.sql:/docker-entrypoint-initdb.d/002_seed.sql"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  localstack:
+    image: localstack/localstack:3
+    environment:
+      - SERVICES=sqs,s3,dynamodb
+      - AWS_DEFAULT_REGION=ap-southeast-1
+      - DEBUG=0
+    ports:
+      - "4566:4566"
+    volumes:
+      - "./docker/init-localstack.sh:/etc/localstack/init/ready.d/init-localstack.sh"
+
+  publisher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["publisher"]
+    command: ["--mode=single"]
+    env_file:
+      - .env
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      localstack:
+        condition: service_started
+    profiles:
+      - app
+
+  subscriber:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["subscriber"]
+    env_file:
+      - .env
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      localstack:
+        condition: service_started
+      line-mock:
+        condition: service_started
+    profiles:
+      - app
+
+  line-mock:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["line-mock"]
+    ports:
+      - "8080:8080"
+    profiles:
+      - app
+
+volumes:
+  mysql-data:

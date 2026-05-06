@@ -1,0 +1,10 @@
+.git
+.env
+bin
+dist
+tmp
+*.log
+.gocache
+.mysql-data
+.mysql
+text
