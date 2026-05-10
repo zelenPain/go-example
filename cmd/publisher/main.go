@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
-	"flag"
+	"errors"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"go-example/internal/awsclient"
@@ -15,16 +18,12 @@ import (
 )
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
+	// Publisher runs as a long-lived worker. The context is canceled when the
+	// process receives Ctrl+C or SIGTERM from Docker/Kubernetes.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	cfg := config.Load()
-	// Publisher has two demo modes:
-	// single: publish all active users in one pass.
-	// batch: split active users into smaller chunks for easier observation/retry.
-	mode := flag.String("mode", "single", "publisher mode: single or batch")
-	batchSize := flag.Int("batch-size", cfg.PublishBatchSize, "number of active users to publish per batch")
-	flag.Parse()
 
 	repo, err := db.Open(ctx, cfg.MySQLDSN)
 	if err != nil {
@@ -41,17 +40,15 @@ func main() {
 		repo,
 		segment.NewStore(awsClients.S3, cfg.S3Bucket),
 		queue.NewClient(awsClients.SQS, cfg.SQSQueueURL),
+		// These values control the demo polling flow:
+		// how often to query campaigns, how many campaigns can run in parallel,
+		// and how many pending campaigns to pick per poll.
+		time.Duration(cfg.PublisherPollSeconds)*time.Second,
+		cfg.PublisherWorkers,
+		cfg.PublisherClaimLimit,
 	)
 
-	switch *mode {
-	case "single":
-		err = service.PublishNextCampaign(ctx)
-	case "batch":
-		err = service.PublishNextCampaignInBatches(ctx, *batchSize)
-	default:
-		log.Fatalf("unsupported publisher mode %q", *mode)
-	}
-	if err != nil {
+	if err := service.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatal(err)
 	}
 }

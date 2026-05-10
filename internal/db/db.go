@@ -51,43 +51,53 @@ func (r *Repository) Close() error {
 	return r.db.Close()
 }
 
-func (r *Repository) NextPendingCampaign(ctx context.Context) (*Campaign, error) {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
+func (r *Repository) PendingCampaigns(ctx context.Context, limit int) ([]Campaign, error) {
+	if limit <= 0 {
+		limit = 1
 	}
-	defer tx.Rollback()
 
-	// FOR UPDATE locks the selected campaign inside this transaction so two
-	// publishers cannot pick the same pending campaign at the same time.
-	row := tx.QueryRowContext(ctx, `
+	// Demo assumption: only one publisher process is running, so a simple
+	// pending query is enough. No transaction or row lock is needed here.
+	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, name, segment_file_key, status
 		FROM message_campaigns
 		WHERE status = 'pending'
 		ORDER BY id ASC
-		LIMIT 1
-		FOR UPDATE`)
-
-	var campaign Campaign
-	if err := row.Scan(&campaign.ID, &campaign.Name, &campaign.SegmentFileKey, &campaign.Status); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
+		LIMIT ?`, limit)
+	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
-	if _, err := tx.ExecContext(ctx, `
+	var campaigns []Campaign
+	for rows.Next() {
+		var campaign Campaign
+		if err := rows.Scan(&campaign.ID, &campaign.Name, &campaign.SegmentFileKey, &campaign.Status); err != nil {
+			return nil, err
+		}
+		campaigns = append(campaigns, campaign)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(campaigns) == 0 {
+		return nil, nil
+	}
+	return campaigns, nil
+}
+
+func (r *Repository) MarkCampaignProcessing(ctx context.Context, id int64) error {
+	// Mark the campaign before handing it to a goroutine. The status condition
+	// keeps the update narrow and avoids changing a campaign that was manually
+	// moved out of pending.
+	_, err := r.db.ExecContext(ctx, `
 		UPDATE message_campaigns
 		SET status = 'processing', started_at = COALESCE(started_at, NOW()), error_message = NULL
-		WHERE id = ?`, campaign.ID); err != nil {
-		return nil, err
+		WHERE id = ? AND status = 'pending'`, id)
+	if err != nil {
+		return err
 	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	campaign.Status = "processing"
-	return &campaign, nil
+	return nil
 }
 
 func (r *Repository) CompleteCampaign(ctx context.Context, id int64) error {

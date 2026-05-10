@@ -1,4 +1,4 @@
-.PHONY: deps infra-up infra-down migrate seed build publisher publisher-batch subscriber line-mock test
+.PHONY: deps infra-up infra-down migrate seed build publisher subscriber line-mock test
 
 deps:
 	go mod tidy
@@ -20,9 +20,6 @@ build:
 
 publisher:
 	go run ./cmd/publisher
-
-publisher-batch:
-	go run ./cmd/publisher --mode=batch --batch-size="$${PUBLISH_BATCH_SIZE:-100}"
 
 subscriber:
 	go run ./cmd/subscriber
